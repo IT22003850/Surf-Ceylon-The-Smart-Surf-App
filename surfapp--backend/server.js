@@ -1,83 +1,63 @@
-// surfapp--backend/server.js (API Gateway)
 const express = require('express');
 const cors = require('cors');
-
-// --- MOCK DATA/LOGIC (TEMPORARY: Copied from frontend/data/mockData.js) ---
-// This will be replaced by API calls (Surfline, OpenWeather, NOAA) and ML logic (Random Forest) in Phase 2
-const surfSpots = [
-  { id: '1', name: 'Arugam Bay', region: 'East Coast', coords: [81.829, 6.843] },
-  { id: '2', name: 'Weligama', region: 'South Coast', coords: [80.426, 5.972] },
-  { id: '3', name: 'Midigama', region: 'South Coast', coords: [80.383, 5.961] },
-  { id: '4', name: 'Hiriketiya', region: 'South Coast', coords: [80.686, 5.976] },
-  { id: '5', name: 'Okanda', region: 'East Coast', coords: [81.657, 6.660] },
-];
-
-const generateForecast = (spotId) => {
-  const now = new Date();
-  const waveHeight = (1 + Math.sin(now.getHours() + parseInt(spotId)) * 0.5).toFixed(1);
-  const windSpeed = (5 + Math.cos(now.getHours() + parseInt(spotId)) * 3).toFixed(0);
-  const tide = Math.sin(now.getHours() * 0.5 + parseInt(spotId)) > 0 ? 'High' : 'Low';
-
-  return {
-    waveHeight: parseFloat(waveHeight),
-    wind: { speed: parseInt(windSpeed), direction: 'Offshore' },
-    tide: { status: tide, next: 'Low in 3h' },
-  };
-};
-
-const calculateSuitability = (forecast, skillLevel) => {
-  let score = 100;
-  const { waveHeight } = forecast;
-
-  if (skillLevel === 'Beginner') {
-    if (waveHeight > 1.5) score -= 60;
-    else if (waveHeight > 1.0) score -= 30;
-  } else if (skillLevel === 'Intermediate') {
-    if (waveHeight < 1.0) score -= 20;
-    if (waveHeight > 2.5) score -= 40;
-  } else if (skillLevel === 'Advanced') {
-    if (waveHeight < 1.8) score -= 30;
-  }
-
-  return Math.max(0, Math.min(100, score));
-};
-
-const getSpotsData = (skillLevel) => {
-  return surfSpots.map(spot => {
-    const forecast = generateForecast(spot.id);
-    const suitability = calculateSuitability(forecast, skillLevel);
-    return { ...spot, forecast, suitability };
-  }).sort((a, b) => b.suitability - a.suitability);
-};
-
-// --- END MOCK DATA/LOGIC ---
-
+// Import the child_process module to run the Python script
+const { spawn } = require('child_process'); 
 const app = express();
 const PORT = 3000;
 
-// Enable CORS for frontend communication
+// Set the path to your Python executable and script
+const PYTHON_EXECUTABLE = 'python'; // Use 'python' or 'python3' depending on your OS setup
+const ML_SCRIPT_PATH = '../surfapp--ml-engine/predict_service.py'; // Path to the new Python file
+
+// Enable CORS
 app.use(cors({
-    origin: 'http://localhost:8081', // Allow requests from your Expo dev server
+    origin: 'http://10.0.2.2:8081', // Updated to 10.0.2.2 for Android emulator
 }));
 app.use(express.json());
 
-// Main Endpoint (FR-011, FR-012): Get all spots, ranked by suitability
+// --- Core API Endpoint: Replaced with Python Call ---
 app.get('/api/spots', (req, res) => {
-    // Extract skill level from query parameters (from the frontend's UserContext)
     const skillLevel = req.query.skill || 'Beginner';
 
-    try {
-        const spots = getSpotsData(skillLevel); // This is where ML-processed data will eventually come from
-        res.json({ spots });
-    } catch (error) {
-        console.error('Error fetching spots:', error);
-        res.status(500).json({ error: 'Failed to retrieve surf spots.' });
-    }
+    // 1. Spawn a Python process and pass the skill level as an argument
+    const pythonProcess = spawn(PYTHON_EXECUTABLE, [ML_SCRIPT_PATH, skillLevel]);
+
+    let dataString = '';
+    let errorString = '';
+
+    // 2. Capture output from the Python script (JSON data)
+    pythonProcess.stdout.on('data', (data) => {
+        dataString += data.toString();
+    });
+
+    // 3. Capture errors from the Python script
+    pythonProcess.stderr.on('data', (data) => {
+        errorString += data.toString();
+    });
+
+    // 4. Handle process close/exit
+    pythonProcess.on('close', (code) => {
+        if (code !== 0) {
+            console.error(`Python script exited with code ${code}. Error: ${errorString}`);
+            return res.status(500).json({ 
+                error: 'ML prediction failed. Check Python logs.',
+                details: errorString 
+            });
+        }
+
+        try {
+            const result = JSON.parse(dataString);
+            // Success: Send the predicted and ranked spots back to the frontend
+            res.json(result); 
+        } catch (error) {
+            console.error('Failed to parse Python output:', error);
+            res.status(500).json({ error: 'Invalid data format from ML engine.' });
+        }
+    });
 });
 
-// Simple endpoint for fetching 7-day chart data
+// Endpoint for fetching 7-day chart data (kept as mock for now, will be updated later)
 app.get('/api/forecast-chart', (req, res) => {
-    // This is the mock for the 7-day forecast graph data
     const chartData = {
         labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
         datasets: [{ data: [1.2, 1.5, 1.3, 2.0, 2.2, 1.8, 1.6] }],
@@ -88,7 +68,6 @@ app.get('/api/forecast-chart', (req, res) => {
 
 // Start the API Gateway
 app.listen(PORT, () => {
-    console.log(`API Gateway running on http://localhost:${PORT}`);
-    console.log("To run the frontend, ensure your Expo server is running.");
-    console.log("Note: This is Step 1. The mock logic must be replaced with real data fetching and ML in Phase 2.");
+    console.log(`API Gateway running on http://10.0.2.2:${PORT}`);
+    console.log(`ML Engine connected at: ${ML_SCRIPT_PATH}`);
 });
