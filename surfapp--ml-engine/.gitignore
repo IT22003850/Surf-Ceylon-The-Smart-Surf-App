@@ -1,0 +1,16 @@
+# Virtual Environment
+/venv
+/env
+__pycache__/
+
+# Python Dependencies
+*.pyc
+
+# ML Model Files (Should be stored in MongoDB, but ignore local copies)
+*.pkl
+*.joblib
+*.h5
+
+# Environment
+.env
+.env.local

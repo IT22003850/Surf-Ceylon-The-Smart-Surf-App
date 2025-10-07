@@ -1,0 +1,67 @@
+// it22003850/surfapp--frontend/SurfApp--frontend-e324eabe43c305ffac4f3010e13f33c56e3743db/app/(spots)/index.js
+import React, { useContext, useState, useEffect } from 'react';
+import { FlatList, SafeAreaView, StyleSheet, ActivityIndicator, View, Text } from 'react-native';
+import { Link } from 'expo-router';
+import { UserContext } from '../../context/UserContext';
+import { getSpotsData } from '../../data/surfApi'; // CHANGED: Import from the new API file
+import SpotCard from '../../components/SpotCard';
+
+const SpotsListScreen = () => {
+  const { skillLevel } = useContext(UserContext);
+  const [spots, setSpots] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchSpots = async () => {
+      try {
+        setLoading(true);
+        const data = await getSpotsData(skillLevel);
+        setSpots(data);
+      } catch (e) {
+        console.error("Error fetching spots for list screen:", e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchSpots();
+  }, [skillLevel]);
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#007bff" />
+        <Text style={{ marginTop: 10 }}>Loading full list of spots...</Text>
+      </View>
+    );
+  }
+
+  if (spots.length === 0) {
+      return (
+          <SafeAreaView style={styles.container}>
+              <Text style={styles.noSpotsText}>No surf spots available right now.</Text>
+          </SafeAreaView>
+      );
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <FlatList
+        data={spots}
+        keyExtractor={item => item.id}
+        renderItem={({ item }) => (
+          <Link href={{ pathname: "/(spots)/detail", params: { spot: JSON.stringify(item) } }} asChild>
+            <SpotCard spot={item} />
+          </Link>
+        )}
+      />
+    </SafeAreaView>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#fff' },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' },
+  noSpotsText: { textAlign: 'center', marginTop: 20, fontSize: 18, color: '#888' },
+});
+
+export default SpotsListScreen;
