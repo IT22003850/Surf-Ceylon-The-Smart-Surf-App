@@ -5,9 +5,11 @@ const { spawn } = require('child_process');
 const app = express();
 const PORT = 3000;
 
-// Set the path to your Python executable and script
-const PYTHON_EXECUTABLE = 'python'; // Use 'python' or 'python3' depending on your OS setup
-const ML_SCRIPT_PATH = '../surfapp--ml-engine/predict_service.py'; // Path to the new Python file
+// --- CRITICAL FIX HERE ---
+// Define the exact path to the VENV Python executable, relative to the surfapp--backend folder.
+// This ensures the Python script is run with the correct dependencies (dotenv, pymongo).
+const PYTHON_EXECUTABLE = '../surfapp--ml-engine/venv/Scripts/python.exe'; 
+const ML_SCRIPT_PATH = '../surfapp--ml-engine/predict_service.py'; 
 
 // Enable CORS
 app.use(cors({
