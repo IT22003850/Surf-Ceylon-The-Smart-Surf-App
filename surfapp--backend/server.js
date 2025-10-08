@@ -35,6 +35,8 @@ app.get('/api/spots', (req, res) => {
     // 3. Capture errors from the Python script
     pythonProcess.stderr.on('data', (data) => {
         errorString += data.toString();
+        // === CRITICAL DEBUGGING LINE ADDED ===
+        console.log(`[PYTHON LOG]: ${data.toString().trim()}`); 
     });
 
     // 4. Handle process close/exit

@@ -1,11 +1,12 @@
 import json
 import sys
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from math import sin
 import os
-import joblib # For model loading/saving
-import numpy as np # For preparing prediction input
+import joblib 
+import numpy as np 
+import pandas as pd # NEW IMPORT for Scikit-learn compatibility
 from dotenv import load_dotenv
 from pymongo import MongoClient
 import requests
@@ -18,17 +19,18 @@ MONGODB_URI = os.getenv("MONGODB_URI")
 DB_NAME = 'surf_app_db'
 COLLECTION_NAME = 'forecast_history'
 
-# Path to the trained model file. This must be created by running train_model.py first.
+# Path to the trained model file.
 MODEL_FILENAME = 'random_forest_surf_model.joblib'
 MODEL_PATH = os.path.join(os.path.dirname(__file__), MODEL_FILENAME)
+FEATURE_NAMES = ['wind_speed', 'pressure'] # Features used in train_model.py
 
-# Static spot data (Will eventually be loaded from DB)
+# Static spot data using stable COORDS instead of unstable city_name
 SURF_SPOTS = [
-    {'id': '1', 'name': 'Arugam Bay', 'region': 'East Coast', 'coords': [81.829, 6.843], 'city_name': 'Ampara'},
-    {'id': '2', 'name': 'Weligama', 'region': 'South Coast', 'coords': [80.426, 5.972], 'city_name': 'Weligama'},
-    {'id': '3', 'name': 'Midigama', 'region': 'South Coast', 'coords': [80.383, 5.961], 'city_name': 'Weligama'}, 
-    {'id': '4', 'name': 'Hiriketiya', 'region': 'South Coast', 'coords': [80.686, 5.976], 'city_name': 'Dikwella'}, 
-    {'id': '5', 'name': 'Okanda', 'region': 'East Coast', 'coords': [81.657, 6.660], 'city_name': 'Pottuvil'},
+    {'id': '1', 'name': 'Arugam Bay', 'region': 'East Coast', 'coords': [81.829, 6.843]},
+    {'id': '2', 'name': 'Weligama', 'region': 'South Coast', 'coords': [80.426, 5.972]},
+    {'id': '3', 'name': 'Midigama', 'region': 'South Coast', 'coords': [80.383, 5.961]}, 
+    {'id': '4', 'name': 'Hiriketiya', 'region': 'South Coast', 'coords': [80.686, 5.976]}, 
+    {'id': '5', 'name': 'Okanda', 'region': 'East Coast', 'coords': [81.657, 6.660]},
 ]
 
 
@@ -46,54 +48,51 @@ except Exception as e:
 # --- DATABASE FUNCTIONS (FR-005) ---
 
 def connect_to_mongodb():
-    """Establishes connection to the MongoDB Atlas cluster and returns the database object."""
+    """Establishes connection to MongoDB Atlas."""
     if not MONGODB_URI:
         print("Error: MONGODB_URI is missing. Cannot connect to database.", file=sys.stderr)
         return None
     try:
-        # Check 2: Network connection/authentication
         client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
         client.admin.command('ping') 
         return client.get_database(DB_NAME)
         
     except Exception as e:
-        # Log the detailed failure
         print(f"Error connecting to MongoDB: {e}", file=sys.stderr)
         return None
 
 def save_historical_data(spot_id, raw_data, prediction):
-    """Saves a snapshot of raw API data and the resulting prediction to MongoDB."""
+    """Saves a snapshot of raw API data and the resulting prediction to MongoDB (FR-005)."""
     db = connect_to_mongodb()
     
-    # CRITICAL FIX: Use 'is not None' for PyMongo database object check
     if db is not None: 
         try:
             history_collection = db[COLLECTION_NAME]
             record = {
                 'spot_id': spot_id,
-                'timestamp': datetime.utcnow(),
+                # Fixes the DeprecationWarning: use timezone-aware objects (datetime.UTC)
+                'timestamp': datetime.now(timezone.utc), 
                 'raw_data': raw_data,
                 'prediction': prediction
             }
             history_collection.insert_one(record)
         except Exception as e:
-            # Log failure to insert record
             print(f"Error inserting record into MongoDB: {e}", file=sys.stderr)
     else:
-        # Graceful Degradation (NFR-012)
         print("Warning: Skipping database save due to connection failure.", file=sys.stderr)
 
 
 # --- API FETCH & ML Prediction ---
 
-def fetch_real_time_weather(city_name):
-    """Fetches real-time wind/weather data from OpenWeather API (FR-002)."""
+def fetch_real_time_weather(coords):
+    """Fetches real-time wind/weather data from OpenWeather API using COORDS (FR-002)."""
     if not OPENWEATHER_API_KEY:
-        print("Error: OPENWEATHER_API_KEY is missing. Check .env file.", file=sys.stderr)
+        print("Error: OPENWEATHER_API_KEY is missing.", file=sys.stderr)
         return None
 
-    # OpenWeather API URL using city name 
-    url = f"http://api.openweathermap.org/data/2.5/weather?q={city_name},LK&appid={OPENWEATHER_API_KEY}&units=metric"
+    # CRITICAL FIX: Use lat/lon for API stability
+    lon, lat = coords
+    url = f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={OPENWEATHER_API_KEY}&units=metric"
     
     try:
         response = requests.get(url)
@@ -102,13 +101,14 @@ def fetch_real_time_weather(city_name):
         
         # Data Cleaning/Extraction
         return {
-            'timestamp': datetime.now().isoformat(),
-            'wind_speed': data['wind']['speed'], # m/s (Key feature for ML)
-            'pressure': data['main']['pressure'],
-            'temp': data['main']['temp'],
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'wind_speed': data['wind'].get('speed'), # m/s
+            'pressure': data['main'].get('pressure'),
+            'temp': data['main'].get('temp'),
         }
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching OpenWeather for {city_name}: {e}", file=sys.stderr)
+        # Log 404/network errors gracefully
+        print(f"Error fetching OpenWeather for coords {coords}: {e}", file=sys.stderr)
         return None
 
 
@@ -117,45 +117,47 @@ def run_ml_prediction(spot, fetched_weather):
     Predicts wave height using the loaded Random Forest model (FR-006).
     """
     
-    # Extract features from fetched data
-    wind_speed_ms = fetched_weather.get('wind_speed', None)
-    pressure = fetched_weather.get('pressure', None)
+    # Extract features, providing None default if missing from API response
+    wind_speed_ms = fetched_weather.get('wind_speed')
+    pressure = fetched_weather.get('pressure')
     
     if SURF_PREDICTOR and wind_speed_ms is not None and pressure is not None:
         # --- ML Model Prediction Path (FR-006) ---
         try:
-            # 1. Prepare Features for the model (must be 2D array: [[wind_speed, pressure]])
-            # NOTE: Feature order MUST match the training data
-            features = np.array([[wind_speed_ms, pressure]])
+            # 1. Prepare Features (Use DataFrame to pass FEATURE_NAMES - CRITICAL FIX)
+            features_df = pd.DataFrame(
+                [[wind_speed_ms, pressure]], 
+                columns=FEATURE_NAMES 
+            )
             
             # 2. Predict Wave Height 
-            predicted_wave_height = SURF_PREDICTOR.predict(features)[0]
+            predicted_wave_height = SURF_PREDICTOR.predict(features_df)[0]
             predicted_wave_height = round(float(predicted_wave_height), 1)
             
-            # Mock accuracy based on target (since true score is complex to derive here)
+            # Mock accuracy based on target (for demonstration)
             accuracy = f"{random.uniform(90, 95):.1f}%" 
             
         except Exception as e:
-            print(f"ML Model Prediction failed: {e}. Falling back.", file=sys.stderr)
+            # Fallback if prediction fails (e.g., bad model data)
+            print(f"ML Model Prediction failed: {e}. Falling back to simulation.", file=sys.stderr)
             predicted_wave_height = random.uniform(0.5, 2.0)
             accuracy = f"{random.randint(60, 80)}%"
 
     else:
-        # --- Fallback Simulation Path ---
-        # Mock calculation: Wave height increases with wind speed
+        # --- Fallback Simulation Path (if model/data is missing) ---
         wind_speed_safe = wind_speed_ms if wind_speed_ms is not None else random.uniform(3, 15)
         predicted_wave_height = 0.5 + (wind_speed_safe / 10) 
         predicted_wave_height = round(float(predicted_wave_height), 1)
         accuracy = f"{random.randint(60, 80)}%" 
 
-    # Mock tide status (for demo purposes)
+    # Mock tide status 
     tide_status = 'High' if sin(datetime.now().hour * 0.5 + int(spot['id'])) > 0 else 'Low'
     
     return {
-        'waveHeight': max(0.2, predicted_wave_height), # Min wave height
+        'waveHeight': max(0.2, predicted_wave_height), 
         'wind': {'speed': round(wind_speed_ms * 3.6), 'direction': 'Offshore'}, 
         'tide': {'status': tide_status, 'next': 'TBD'},
-        'accuracy_confidence': accuracy # FR-009 implemented here
+        'accuracy_confidence': accuracy 
     }
 
 
@@ -183,8 +185,8 @@ def get_spots_with_predictions(skill_level):
     predicted_spots = []
     
     for spot in SURF_SPOTS:
-        # Step 1: Fetch Real-Time Data (FR-002)
-        fetched_weather = fetch_real_time_weather(spot['city_name'])
+        # Step 1: Fetch Real-Time Data using coordinates
+        fetched_weather = fetch_real_time_weather(spot['coords'])
         
         if fetched_weather is None:
             continue
@@ -212,6 +214,7 @@ def get_spots_with_predictions(skill_level):
 # --- Execution Entry Point ---
 
 if __name__ == '__main__':
+    # Argument extraction logic
     if len(sys.argv) > 1:
         skill = sys.argv[1]
     else:
