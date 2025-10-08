@@ -1,10 +1,12 @@
 // it22003850/surfapp--frontend/SurfApp--frontend-e324eabe43c305ffac4f3010e13f33c56e3743db/app/(spots)/index.js
-import React, { useContext, useState, useEffect } from 'react';
-import { FlatList, SafeAreaView, StyleSheet, ActivityIndicator, View, Text } from 'react-native';
-import { Link } from 'expo-router';
+
 import { UserContext } from '../../context/UserContext';
 import { getSpotsData } from '../../data/surfApi'; // CHANGED: Import from the new API file
 import SpotCard from '../../components/SpotCard';
+import React, { useContext, useState, useEffect } from 'react';
+import { FlatList, StyleSheet, ActivityIndicator, View, Text } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context'; // CORRECT: import from safe-area-context
+import { Link } from 'expo-router';
 
 const SpotsListScreen = () => {
   const { skillLevel } = useContext(UserContext);
