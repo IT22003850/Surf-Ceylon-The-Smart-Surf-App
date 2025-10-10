@@ -49,7 +49,6 @@ const calculateSuitability = (predictions, preferences) => {
     }
 
     // RULE 4: Board Type Adjustment (Heuristic based on board suitability)
-    // This uses the current predictions. When Swell Period is integrated, this can be refined.
     if (boardType === 'Longboard' && waveHeight > 2.0) {
         score -= 15; 
     } else if (boardType === 'Shortboard' && waveHeight < 0.8) {
@@ -72,7 +71,7 @@ app.get('/api/spots', (req, res) => {
     // The entire userPreferences object is in req.query
     const preferences = req.query; 
 
-    // The Python script (Model 1) only needs a basic skill level for internal fallback/logging
+    // The Python script (Model 1) only needs minimal data, if any, for internal fallback
     const skillLevelForPython = preferences.skillLevel || 'Beginner';
     
     // 1. Spawn Python process (runs Model 1 - Prediction)

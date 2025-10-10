@@ -67,7 +67,7 @@ const ProfileScreen = () => {
             <TouchableOpacity
               key={tide}
               style={[styles.smallButton, userPreferences.tidePreference === tide && styles.selectedButton]}
-              onPress={() => updatePreferences({ tidePreference: tide })}
+              on onPress={() => updatePreferences({ tidePreference: tide })}
             >
               <Text style={[styles.buttonText, userPreferences.tidePreference === tide && styles.selectedButtonText]}>{tide}</Text>
             </TouchableOpacity>
