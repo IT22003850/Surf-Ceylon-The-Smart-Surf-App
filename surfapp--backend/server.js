@@ -1,66 +1,132 @@
 const express = require('express');
 const cors = require('cors');
-// Import the child_process module to run the Python script
 const { spawn } = require('child_process'); 
 const app = express();
 const PORT = 3000;
 
-// --- CRITICAL FIX HERE ---
-// Define the exact path to the VENV Python executable, relative to the surfapp--backend folder.
-// This ensures the Python script is run with the correct dependencies (dotenv, pymongo).
+// Path to the Python executable and ML script
 const PYTHON_EXECUTABLE = '../surfapp--ml-engine/venv/Scripts/python.exe'; 
 const ML_SCRIPT_PATH = '../surfapp--ml-engine/predict_service.py'; 
 
-// Enable CORS
+// --- MODEL 2: SUITABILITY CALCULATION (NODE.JS) ---
+// This function performs Model 2's job: translating ML predictions + User preferences into a score.
+const calculateSuitability = (predictions, preferences) => {
+    // Parse preferences from query strings (Node.js treats query params as strings)
+    const minWaveHeight = parseFloat(preferences.minWaveHeight) || 0.5;
+    const maxWaveHeight = parseFloat(preferences.maxWaveHeight) || 2.5;
+    const skillLevel = preferences.skillLevel || 'Beginner';
+    const tidePreference = preferences.tidePreference || 'Any';
+    const boardType = preferences.boardType || 'Longboard';
+
+    // 1. Initial Score based on ML Prediction (Wave Height)
+    let score = 100;
+    const waveHeight = predictions.waveHeight;
+
+    // --- Core Model 2 Logic (Combining Safety, Skill, and Preference) ---
+
+    // RULE 1: Skill Level vs. Absolute Wave Height (Safety/Difficulty)
+    if (skillLevel === 'Beginner') {
+        if (waveHeight > 1.5) score -= 60; 
+        else if (waveHeight > 1.0) score -= 30;
+    } else if (skillLevel === 'Intermediate') {
+        if (waveHeight < 0.8) score -= 20; 
+        if (waveHeight > 2.5) score -= 40;
+    } else if (skillLevel === 'Advanced') {
+        if (waveHeight < 1.8) score -= 30;
+    }
+    
+    // RULE 2: User Preferred Wave Height Range (Preference)
+    if (waveHeight < minWaveHeight) {
+        score -= 10; 
+    }
+    if (waveHeight > maxWaveHeight) {
+        score -= 20; 
+    }
+    
+    // RULE 3: Tide Match (Uses Predicted Tide Status)
+    if (tidePreference !== 'Any' && predictions.tide.status !== tidePreference) {
+        score -= 10;
+    }
+
+    // RULE 4: Board Type Adjustment (Heuristic based on board suitability)
+    // This uses the current predictions. When Swell Period is integrated, this can be refined.
+    if (boardType === 'Longboard' && waveHeight > 2.0) {
+        score -= 15; 
+    } else if (boardType === 'Shortboard' && waveHeight < 0.8) {
+        score -= 15; 
+    }
+    
+    // Ensure score stays between 0 and 100
+    return Math.max(0, Math.min(100, score));
+};
+// --- END MODEL 2 LOGIC ---
+
+// Enable CORS and parsing
 app.use(cors({
-    origin: 'http://10.0.2.2:8081', // Updated to 10.0.2.2 for Android emulator
+    origin: 'http://10.0.2.2:8081', 
 }));
 app.use(express.json());
 
-// --- Core API Endpoint: Replaced with Python Call ---
+// Main Endpoint: Get all spots, ranked by suitability
 app.get('/api/spots', (req, res) => {
-    const skillLevel = req.query.skill || 'Beginner';
+    // The entire userPreferences object is in req.query
+    const preferences = req.query; 
 
-    // 1. Spawn a Python process and pass the skill level as an argument
-    const pythonProcess = spawn(PYTHON_EXECUTABLE, [ML_SCRIPT_PATH, skillLevel]);
+    // The Python script (Model 1) only needs a basic skill level for internal fallback/logging
+    const skillLevelForPython = preferences.skillLevel || 'Beginner';
+    
+    // 1. Spawn Python process (runs Model 1 - Prediction)
+    const pythonProcess = spawn(PYTHON_EXECUTABLE, [ML_SCRIPT_PATH, skillLevelForPython]); 
 
     let dataString = '';
     let errorString = '';
 
-    // 2. Capture output from the Python script (JSON data)
+    // 2. Capture Python output and logs
     pythonProcess.stdout.on('data', (data) => {
         dataString += data.toString();
     });
 
-    // 3. Capture errors from the Python script
     pythonProcess.stderr.on('data', (data) => {
         errorString += data.toString();
-        // === CRITICAL DEBUGGING LINE ADDED ===
+        // Log Python status messages for debugging
         console.log(`[PYTHON LOG]: ${data.toString().trim()}`); 
     });
 
-    // 4. Handle process close/exit
+    // 3. Handle process close/exit
     pythonProcess.on('close', (code) => {
         if (code !== 0) {
             console.error(`Python script exited with code ${code}. Error: ${errorString}`);
             return res.status(500).json({ 
-                error: 'ML prediction failed. Check Python logs.',
+                error: 'ML prediction failed in Python core.',
                 details: errorString 
             });
         }
 
         try {
-            const result = JSON.parse(dataString);
-            // Success: Send the predicted and ranked spots back to the frontend
-            res.json(result); 
+            // Raw Predictions from Model 1 (Python)
+            const pythonResult = JSON.parse(dataString);
+            const spotsWithPredictions = pythonResult.spots;
+            
+            // 4. Apply Model 2 (Node.js/JavaScript)
+            const finalSpots = spotsWithPredictions.map(spot => {
+                // Attach the Suitability Score generated by Node.js logic
+                const suitability = calculateSuitability(spot.forecast, preferences);
+                return { ...spot, suitability: suitability };
+            });
+            
+            // 5. Sort and Send (FR-012: Sort by best suitability)
+            finalSpots.sort((a, b) => b.suitability - a.suitability);
+
+            res.json({ spots: finalSpots });
+            
         } catch (error) {
-            console.error('Failed to parse Python output:', error);
-            res.status(500).json({ error: 'Invalid data format from ML engine.' });
+            console.error('Failed to process Python output or apply Model 2 logic:', error);
+            res.status(500).json({ error: 'Internal server error during recommendation.', details: error.message });
         }
     });
 });
 
-// Endpoint for fetching 7-day chart data (kept as mock for now, will be updated later)
+// Endpoint for fetching 7-day chart data (Mock for now, needs Model 1 integration later)
 app.get('/api/forecast-chart', (req, res) => {
     const chartData = {
         labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],

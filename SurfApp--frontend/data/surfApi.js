@@ -1,16 +1,16 @@
-// data/surfApi.js
-
 const API_BASE_URL = 'http://10.0.2.2:3000/api';
 
 /**
- * Fetches the list of surf spots, ranked by suitability based on the user's skill level.
- * This function communicates with the new API Gateway.
- * @param {string} skillLevel - The user's current skill level.
+ * Fetches the list of surf spots, ranked by suitability based on the user's preferences.
+ * @param {Object} preferences - The full user preferences object from UserContext.
  * @returns {Array<Object>} An array of spot data with forecast and suitability.
  */
-export async function getSpotsData(skillLevel) {
+export async function getSpotsData(preferences) { 
   try {
-    const response = await fetch(`${API_BASE_URL}/spots?skill=${skillLevel}`);
+    // Convert preferences object into URL query string (e.g., skillLevel=Beginner&minWaveHeight=0.5)
+    const queryString = new URLSearchParams(preferences).toString(); 
+    
+    const response = await fetch(`${API_BASE_URL}/spots?${queryString}`); 
     
     if (!response.ok) {
       throw new Error(`API call failed with status: ${response.status}`);
@@ -21,14 +21,13 @@ export async function getSpotsData(skillLevel) {
 
   } catch (error) {
     console.error("Error fetching spots from API:", error);
-    // Fallback to empty array or a cached version if implemented later
     return []; 
   }
 }
 
 /**
  * Fetches the 7-day wave forecast data for the chart.
- * This is currently mocked on the backend.
+ * This is currently a mock endpoint on the Node.js server.
  */
 export async function get7DayForecast() {
   try {
@@ -42,20 +41,17 @@ export async function get7DayForecast() {
 
   } catch (error) {
     console.error("Error fetching chart data from API:", error);
-    // Return a default structure to prevent app crash
     return { labels: [], datasets: [{ data: [0] }] };
   }
 }
 
 /**
- * Gets the static spot data used primarily for the Mapbox marker coordinates.
- * This is deliberately kept static for now as coordinates don't change.
- * In Phase 2, this list will be fetched from a dedicated spot database.
+ * Static spot data used primarily for the Mapbox marker coordinates.
  */
 export const surfSpots = [
   { id: '1', name: 'Arugam Bay', region: 'East Coast', coords: [81.829, 6.843] },
   { id: '2', name: 'Weligama', region: 'South Coast', coords: [80.426, 5.972] },
   { id: '3', name: 'Midigama', region: 'South Coast', coords: [80.383, 5.961] },
   { id: '4', name: 'Hiriketiya', region: 'South Coast', coords: [80.686, 5.976] },
-  { id: '5', name: 'Okanda', region: 'East Coast', coords: [81.657, 6.660] },
+  { id: '5', 'name': 'Okanda', region: 'East Coast', coords: [81.657, 6.660] },
 ];

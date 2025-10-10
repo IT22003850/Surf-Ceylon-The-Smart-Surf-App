@@ -1,16 +1,14 @@
-// it22003850/surfapp--frontend/SurfApp--frontend-e324eabe43c305ffac4f3010e13f33c56e3743db/app/index.js
-
-import { UserContext } from '../context/UserContext';
-import { getSpotsData } from '../data/surfApi'; // CHANGED: Import from the new API file
-import SpotCard from '../components/SpotCard';
+// SurfApp--frontend/app/index.js
 import React, { useContext, useState, useEffect } from 'react';
 import { Text, StyleSheet, ActivityIndicator, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context'; // CORRECT: import from safe-area-context
+import { SafeAreaView } from 'react-native-safe-area-context'; 
 import { Link } from 'expo-router';
-
+import { UserContext } from '../context/UserContext';
+import { getSpotsData } from '../data/surfApi'; 
+import SpotCard from '../components/SpotCard';
 
 const HomeScreen = () => {
-  const { skillLevel } = useContext(UserContext);
+  const { userPreferences } = useContext(UserContext); // CHANGED: Get full preferences
   const [spots, setSpots] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -18,7 +16,8 @@ const HomeScreen = () => {
     const fetchSpots = async () => {
       try {
         setLoading(true);
-        const data = await getSpotsData(skillLevel);
+        // CHANGED: Pass the full preferences object to the API
+        const data = await getSpotsData(userPreferences); 
         setSpots(data);
       } catch (e) {
         console.error("Error fetching spots for home screen:", e);
@@ -26,8 +25,9 @@ const HomeScreen = () => {
         setLoading(false);
       }
     };
+    // Dependency now tracks the entire preferences object
     fetchSpots();
-  }, [skillLevel]);
+  }, [userPreferences]); 
 
   const topPick = spots[0]; // The best recommendation based on sorting
 
@@ -43,7 +43,7 @@ const HomeScreen = () => {
   if (!topPick) {
      return (
       <SafeAreaView style={styles.container}>
-        <Text style={styles.header}>Welcome, {skillLevel} Surfer!</Text>
+        <Text style={styles.header}>Welcome, {userPreferences.skillLevel} Surfer!</Text>
         <Text style={styles.subHeader}>No spots found right now.</Text>
       </SafeAreaView>
      );
@@ -51,7 +51,7 @@ const HomeScreen = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.header}>Welcome, {skillLevel} Surfer!</Text>
+      <Text style={styles.header}>Welcome, {userPreferences.skillLevel} Surfer!</Text>
       <Text style={styles.subHeader}>Todays Top Recommendation</Text>
       
       <Link href={{ pathname: "/(spots)/detail", params: { spot: JSON.stringify(topPick) } }} asChild>
