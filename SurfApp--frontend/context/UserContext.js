@@ -3,22 +3,21 @@ import React, { createContext, useState } from 'react';
 export const UserContext = createContext();
 
 export const UserProvider = ({ children }) => {
-  // Stores all preferences needed for Model 2 (Suitability Score)
   const [userPreferences, setUserPreferences] = useState({
-    skillLevel: 'Beginner', 
-    minWaveHeight: 0.5,      
-    maxWaveHeight: 1.5,      
-    tidePreference: 'Any',   
-    boardType: 'Longboard',  
-  }); 
-
-  // Combined setter function
-  const updatePreferences = (newPrefs) => {
-    setUserPreferences(prev => ({ ...prev, ...newPrefs }));
-  };
+    skillLevel: 'Beginner',
+    minWaveHeight: 0.5,
+    maxWaveHeight: 1.5,
+    tidePreference: 'Any',
+    boardType: 'Soft-top',
+  });
+  
+  // --- THIS IS THE FIX ---
+  // The 'value' prop now includes both the state (userPreferences)
+  // and the function to update it (setUserPreferences).
+  const value = { userPreferences, setUserPreferences };
 
   return (
-    <UserContext.Provider value={{ userPreferences, updatePreferences }}>
+    <UserContext.Provider value={value}>
       {children}
     </UserContext.Provider>
   );
