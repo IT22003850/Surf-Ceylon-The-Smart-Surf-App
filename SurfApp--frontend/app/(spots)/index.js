@@ -1,7 +1,5 @@
-// it22003850/surfapp--frontend/SurfApp--frontend-e324eabe43c305ffac4f3010e13f33c56e3743db/app/(spots)/index.js
-
 import { UserContext } from '../../context/UserContext';
-import { getSpotsData } from '../../data/surfApi';
+import { getSpotsData } from '../../data/surfApi'; 
 import SpotCard from '../../components/SpotCard';
 import React, { useContext, useState, useEffect } from 'react';
 import { FlatList, StyleSheet, ActivityIndicator, View, Text } from 'react-native';
@@ -9,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Link } from 'expo-router';
 
 const SpotsListScreen = () => {
-  // --- FIX 1: Get the full userPreferences object, not just skillLevel ---
+  // --- FIX #1: Get the entire userPreferences object from the context ---
   const { userPreferences } = useContext(UserContext);
   const [spots, setSpots] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -18,7 +16,7 @@ const SpotsListScreen = () => {
     const fetchSpots = async () => {
       try {
         setLoading(true);
-        // --- FIX 2: Pass the entire preferences object to the API call ---
+        // --- FIX #2: Pass the complete userPreferences object to the API call ---
         const data = await getSpotsData(userPreferences);
         setSpots(data);
       } catch (e) {
@@ -28,7 +26,7 @@ const SpotsListScreen = () => {
       }
     };
     fetchSpots();
-  // --- FIX 3: Re-fetch data whenever any preference changes ---
+  // --- FIX #3: The useEffect hook now depends on the entire object to refetch data when any preference changes ---
   }, [userPreferences]);
 
   if (loading) {
