@@ -22,7 +22,7 @@ FEATURE_NAMES = [
 ]
 TARGET_NAMES = ['waveHeight', 'wavePeriod', 'windSpeed', 'windDirection']
 
-# --- THIS IS THE FIX: The 'coords' are now a simple flat array, not a nested one ---
+# --- THIS IS THE FIX: 'coords' is now a simple flat array [lon, lat] ---
 SURF_SPOTS = [
     {'id': '1', 'name': 'Arugam Bay', 'region': 'East Coast', 'coords': [81.829, 6.843]},
     {'id': '2', 'name': 'Weligama', 'region': 'South Coast', 'coords': [80.426, 5.972]},
