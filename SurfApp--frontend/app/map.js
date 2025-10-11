@@ -1,3 +1,5 @@
+// SurfApp--frontend/app/map.js
+
 import React, { useState, useEffect, useContext } from 'react';
 import { View, StyleSheet, ActivityIndicator, Text } from 'react-native';
 import Mapbox from '@rnmapbox/maps';
@@ -26,6 +28,7 @@ const MapScreen = () => {
       try {
         setLoading(true);
         setError(null);
+        // Uses the function updated in the previous step with the static data fallback
         const data = await getSpotsData(userPreferences);
         setSpots(data);
       } catch (error) {
@@ -70,7 +73,6 @@ const MapScreen = () => {
           centerCoordinate={[80.7718, 7.8731]}
         />
         {spots.map(spot => {
-          // --- FIX #2: Ensure coordinates are valid numbers before rendering ---
           const lon = parseFloat(spot.coords[0]);
           const lat = parseFloat(spot.coords[1]);
 
@@ -83,7 +85,8 @@ const MapScreen = () => {
             <Mapbox.PointAnnotation
               key={spot.id}
               id={spot.id}
-              coordinate={[lon, lat]}
+              // Coordinates are correctly [Longitude, Latitude]
+              coordinate={[lon, lat]} 
             >
               <View style={[styles.markerContainer, { backgroundColor: getMarkerColor(spot.suitability) }]}>
                 <Text style={styles.markerText}>{spot.suitability.toFixed(0)}</Text>
@@ -112,6 +115,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderColor: 'white',
     borderWidth: 2,
+    // ✅ FIX: Explicitly set zIndex to ensure custom marker views render on top
+    zIndex: 99 
   },
   markerText: {
     color: 'white',
