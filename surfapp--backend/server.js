@@ -1,131 +1,130 @@
 const express = require('express');
 const cors = require('cors');
-const { spawn } = require('child_process'); 
+const { spawn } = require('child_process');
 const app = express();
 const PORT = 3000;
 
-// Path to the Python executable and ML script
+// --- Configuration ---
+// Make sure these paths are correct for your environment
 const PYTHON_EXECUTABLE = '../surfapp--ml-engine/venv/Scripts/python.exe'; 
 const ML_SCRIPT_PATH = '../surfapp--ml-engine/predict_service.py'; 
 
-// --- MODEL 2: SUITABILITY CALCULATION (NODE.JS) ---
-// This function performs Model 2's job: translating ML predictions + User preferences into a score.
-const calculateSuitability = (predictions, preferences) => {
-    // Parse preferences from query strings (Node.js treats query params as strings)
+// --- MODEL 2: ADVANCED SUITABILITY SCORING ALGORITHM ---
+const calculateSuitability = (predictions, preferences, spotRegion) => {
+    // 1. Parse and validate inputs from the user's profile and Model 1's predictions
+    const { skillLevel, boardType, tidePreference } = preferences;
     const minWaveHeight = parseFloat(preferences.minWaveHeight) || 0.5;
     const maxWaveHeight = parseFloat(preferences.maxWaveHeight) || 2.5;
-    const skillLevel = preferences.skillLevel || 'Beginner';
-    const tidePreference = preferences.tidePreference || 'Any';
-    const boardType = preferences.boardType || 'Longboard';
+    const { waveHeight, wavePeriod, windSpeed, windDirection, tide } = predictions;
 
-    // 1. Initial Score based on ML Prediction (Wave Height)
-    let score = 100;
-    const waveHeight = predictions.waveHeight;
+    let score = 100; // Start with a perfect score and deduct points based on rules
 
-    // --- Core Model 2 Logic (Combining Safety, Skill, and Preference) ---
+    // 2. Apply Scoring Rules
 
-    // RULE 1: Skill Level vs. Absolute Wave Height (Safety/Difficulty)
+    // --- Rule: Wave Height vs. Skill Level (Safety & Challenge) ---
     if (skillLevel === 'Beginner') {
-        if (waveHeight > 1.5) score -= 60; 
+        if (waveHeight > 1.5) score -= 60; // Too big
         else if (waveHeight > 1.0) score -= 30;
     } else if (skillLevel === 'Intermediate') {
-        if (waveHeight < 0.8) score -= 20; 
-        if (waveHeight > 2.5) score -= 40;
+        if (waveHeight < 0.8) score -= 20; // Too small
+        if (waveHeight > 2.5) score -= 40; // Too big
     } else if (skillLevel === 'Advanced') {
-        if (waveHeight < 1.8) score -= 30;
+        if (waveHeight < 1.5) score -= 30; // Too small
     }
     
-    // RULE 2: User Preferred Wave Height Range (Preference)
-    if (waveHeight < minWaveHeight) {
-        score -= 10; 
-    }
-    if (waveHeight > maxWaveHeight) {
-        score -= 20; 
+    // --- Rule: Wave Height vs. User's Explicit Preference ---
+    if (waveHeight < minWaveHeight || waveHeight > maxWaveHeight) {
+        score -= 25; // Penalize if outside the user's desired range
     }
     
-    // RULE 3: Tide Match (Uses Predicted Tide Status)
-    if (tidePreference !== 'Any' && predictions.tide.status !== tidePreference) {
-        score -= 10;
+    // --- Rule: Wave Period (Power & Quality) ---
+    if (boardType === 'Shortboard' && wavePeriod < 9) score -= 20; // Short period is weak for shortboards
+    if (boardType !== 'Shortboard' && wavePeriod > 12) score -= 15; // Very powerful swell can be hard on longboards
+
+    // --- Rule: Wind Conditions ---
+    if (windSpeed > 25) score -= 50; // Heavy onshore/choppy conditions
+    else if (windSpeed > 15) score -= 25;
+    
+    // TODO: This is a simplified offshore wind check. A more advanced version
+    // would have the exact offshore direction for each specific surf spot.
+    const isOffshoreForEastCoast = (spotRegion === 'East Coast' && windDirection > 240 && windDirection < 300);
+    const isOffshoreForSouthCoast = (spotRegion === 'South Coast' && windDirection > 330 || windDirection < 30);
+    if (!isOffshoreForEastCoast && !isOffshoreForSouthCoast) {
+        score -= 30; // Onshore/cross-shore wind penalty
     }
 
-    // RULE 4: Board Type Adjustment (Heuristic based on board suitability)
-    if (boardType === 'Longboard' && waveHeight > 2.0) {
-        score -= 15; 
-    } else if (boardType === 'Shortboard' && waveHeight < 0.8) {
-        score -= 15; 
+    // --- Rule: Tide Preference ---
+    if (tidePreference !== 'Any' && tide.status !== tidePreference) {
+        score -= 15;
     }
-    
-    // Ensure score stays between 0 and 100
+
+    // --- Rule: Monsoon Season (Critical for Sri Lanka) ---
+    const currentMonth = new Date().getMonth() + 1; // January is 1, December is 12
+    const isEastCoastSeason = currentMonth >= 4 && currentMonth <= 10; // Approx. April to October
+
+    if (spotRegion === 'East Coast' && !isEastCoastSeason) score -= 60; // Heavy penalty for off-season
+    if (spotRegion === 'South Coast' && isEastCoastSeason) score -= 60; // Heavy penalty for off-season
+
+    // 3. Final Score: Ensure it's clamped between 0 and 100
     return Math.max(0, Math.min(100, score));
 };
-// --- END MODEL 2 LOGIC ---
 
-// Enable CORS and parsing
-app.use(cors({
-    origin: 'http://10.0.2.2:8081', 
-}));
+// --- API Endpoints ---
+app.use(cors());
 app.use(express.json());
 
-// Main Endpoint: Get all spots, ranked by suitability
+// Main endpoint for getting ranked surf spot recommendations
 app.get('/api/spots', (req, res) => {
-    // The entire userPreferences object is in req.query
-    const preferences = req.query; 
-
-    // The Python script (Model 1) only needs minimal data, if any, for internal fallback
-    const skillLevelForPython = preferences.skillLevel || 'Beginner';
+    const userPreferences = req.query; 
     
-    // 1. Spawn Python process (runs Model 1 - Prediction)
-    const pythonProcess = spawn(PYTHON_EXECUTABLE, [ML_SCRIPT_PATH, skillLevelForPython]); 
+    // Spawn the Python process to run Model 1. It no longer needs user input.
+    const pythonProcess = spawn(PYTHON_EXECUTABLE, [ML_SCRIPT_PATH]);
 
-    let dataString = '';
-    let errorString = '';
+    let pythonOutput = '';
+    let pythonError = '';
 
-    // 2. Capture Python output and logs
     pythonProcess.stdout.on('data', (data) => {
-        dataString += data.toString();
+        pythonOutput += data.toString();
     });
 
     pythonProcess.stderr.on('data', (data) => {
-        errorString += data.toString();
-        // Log Python status messages for debugging
-        console.log(`[PYTHON LOG]: ${data.toString().trim()}`); 
+        pythonError += data.toString();
+        console.log(`[PYTHON LOG]: ${data.toString().trim()}`);
     });
 
-    // 3. Handle process close/exit
     pythonProcess.on('close', (code) => {
         if (code !== 0) {
-            console.error(`Python script exited with code ${code}. Error: ${errorString}`);
+            console.error(`Python script failed. Code: ${code}. Error: ${pythonError}`);
             return res.status(500).json({ 
-                error: 'ML prediction failed in Python core.',
-                details: errorString 
+                error: 'The ML prediction engine failed to run.',
+                details: pythonError 
             });
         }
 
         try {
-            // Raw Predictions from Model 1 (Python)
-            const pythonResult = JSON.parse(dataString);
-            const spotsWithPredictions = pythonResult.spots;
+            // The raw JSON output from Model 1 (predict_service.py)
+            const model1Result = JSON.parse(pythonOutput);
+            const spotsWithPredictions = model1Result.spots;
             
-            // 4. Apply Model 2 (Node.js/JavaScript)
-            const finalSpots = spotsWithPredictions.map(spot => {
-                // Attach the Suitability Score generated by Node.js logic
-                const suitability = calculateSuitability(spot.forecast, preferences);
-                return { ...spot, suitability: suitability };
+            // Apply Model 2 (Suitability Scoring) to each spot
+            const finalRankedSpots = spotsWithPredictions.map(spot => {
+                const suitabilityScore = calculateSuitability(spot.forecast, userPreferences, spot.region);
+                return { ...spot, suitability: suitabilityScore };
             });
             
-            // 5. Sort and Send (FR-012: Sort by best suitability)
-            finalSpots.sort((a, b) => b.suitability - a.suitability);
+            // Sort the final list from highest to lowest suitability
+            finalRankedSpots.sort((a, b) => b.suitability - a.suitability);
 
-            res.json({ spots: finalSpots });
+            res.json({ spots: finalRankedSpots });
             
         } catch (error) {
-            console.error('Failed to process Python output or apply Model 2 logic:', error);
-            res.status(500).json({ error: 'Internal server error during recommendation.', details: error.message });
+            console.error('Error processing Python output or scoring:', error);
+            res.status(500).json({ error: 'Internal server error while generating recommendations.', details: error.message });
         }
     });
 });
 
-// Endpoint for fetching 7-day chart data (Mock for now, needs Model 1 integration later)
+// Mock endpoint for the 7-day forecast chart
 app.get('/api/forecast-chart', (req, res) => {
     const chartData = {
         labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
@@ -134,9 +133,7 @@ app.get('/api/forecast-chart', (req, res) => {
     res.json(chartData);
 });
 
-
-// Start the API Gateway
+// Start the server
 app.listen(PORT, () => {
-    console.log(`API Gateway running on http://10.0.2.2:${PORT}`);
-    console.log(`ML Engine connected at: ${ML_SCRIPT_PATH}`);
+    console.log(`Surf Ceylon Backend running on http://localhost:${PORT}`);
 });

@@ -1,31 +1,27 @@
-import json
 import sys
-import random
 import os
-import joblib 
-import numpy as np 
+import json
+import joblib
 import pandas as pd
-from datetime import datetime, timezone
-from math import sin
-from dotenv import load_dotenv
-from pymongo import MongoClient
 import requests
-import arrow # Library for date/time handling
+import arrow
+from dotenv import load_dotenv
 
 # --- Configuration ---
 load_dotenv()
-STORMGLASS_API_KEY = os.getenv("STORMGLASS_API_KEY") 
-MONGODB_URI = os.getenv("MONGODB_URI") 
-DB_NAME = 'surf_app_db'
-COLLECTION_NAME = 'forecast_history'
-
-# Feature names used for training/prediction (CRITICAL: MUST MATCH train_model.py)
-FEATURE_NAMES = ['windSpeed', 'swellHeight', 'swellPeriod', 'seaLevel'] 
-
-MODEL_FILENAME = 'random_forest_surf_model.joblib'
+STORMGLASS_API_KEY = os.getenv("STORMGLASS_API_KEY")
+MODEL_FILENAME = 'surf_forecast_model.joblib' # Correct model file
 MODEL_PATH = os.path.join(os.path.dirname(__file__), MODEL_FILENAME)
 
-# Static spot data 
+# --- 🎯 Definitions (MUST MATCH train_model.py) ---
+FEATURE_NAMES = [
+    'swellHeight', 'swellPeriod', 'swellDirection', 'windSpeed',
+    'windDirection', 'seaLevel', 'gust', 'secondarySwellHeight',
+    'secondarySwellPeriod', 'secondarySwellDirection'
+]
+TARGET_NAMES = ['waveHeight', 'wavePeriod', 'windSpeed', 'windDirection']
+
+# Static data for all surf spots
 SURF_SPOTS = [
     {'id': '1', 'name': 'Arugam Bay', 'region': 'East Coast', 'coords': [81.829, 6.843]},
     {'id': '2', 'name': 'Weligama', 'region': 'South Coast', 'coords': [80.426, 5.972]},
@@ -34,206 +30,115 @@ SURF_SPOTS = [
     {'id': '5', 'name': 'Okanda', 'region': 'East Coast', 'coords': [81.657, 6.660]},
 ]
 
-
-# --- Model Loading (Runs once) ---
-SURF_PREDICTOR = None
+# --- Model Loading ---
 try:
-    if os.path.exists(MODEL_PATH):
-        SURF_PREDICTOR = joblib.load(MODEL_PATH)
-        print("Trained Random Forest Model loaded successfully.", file=sys.stderr)
+    SURF_PREDICTOR = joblib.load(MODEL_PATH)
+    print("Multi-output Random Forest Model loaded successfully.", file=sys.stderr)
+except FileNotFoundError:
+    SURF_PREDICTOR = None
+    print(f"Warning: Model file not found at '{MODEL_PATH}'. The service will run in simulation mode.", file=sys.stderr)
 except Exception as e:
     SURF_PREDICTOR = None
     print(f"Error loading model: {e}. Running in simulation mode.", file=sys.stderr)
 
+def _get_average_from_sources(source_dict):
+    """Averages values from different weather sources."""
+    if not source_dict: return None
+    valid_values = [v for v in source_dict.values() if isinstance(v, (int, float))]
+    return sum(valid_values) / len(valid_values) if valid_values else None
 
-# --- DATABASE FUNCTIONS (FR-005) ---
-
-def connect_to_mongodb():
-    """Establishes connection to MongoDB Atlas."""
-    if not MONGODB_URI:
-        print("Error: MONGODB_URI is missing. Cannot connect to database.", file=sys.stderr)
-        return None
-    try:
-        client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
-        client.admin.command('ping') 
-        return client.get_database(DB_NAME)
-    except Exception as e:
-        print(f"Error connecting to MongoDB: {e}", file=sys.stderr)
-        return None
-
-def save_historical_data(spot_id, raw_data, prediction):
-    """Saves a snapshot of raw API data and the resulting prediction to MongoDB (FR-005)."""
-    db = connect_to_mongodb()
-    if db is not None: 
-        try:
-            history_collection = db[COLLECTION_NAME]
-            record = {
-                'spot_id': spot_id,
-                'timestamp': datetime.now(timezone.utc), 
-                'raw_data': raw_data,
-                'prediction': prediction
-            }
-            history_collection.insert_one(record)
-        except Exception as e:
-            print(f"Error inserting record into MongoDB: {e}", file=sys.stderr)
-    else:
-        print("Warning: Skipping database save due to connection failure.", file=sys.stderr)
-
-
-# --- API FETCH & ML Prediction (Model 1) ---
-
-def fetch_real_time_weather(coords):
-    """Fetches real-time marine and wind data using coordinates from Stormglass API (FR-002)."""
+def fetch_future_weather_features(coords):
+    """Fetches future weather data needed for Model 1's input features."""
     if not STORMGLASS_API_KEY:
-        print("Error: STORMGLASS_API_KEY is missing.", file=sys.stderr)
-        return None
+        return None, False
 
     lon, lat = coords
+    start_time = arrow.utcnow()
+    end_time = start_time.shift(hours=+1) # Fetch data for the current hour
     
-    # Define ALL parameters needed for Model 1
-    params = ','.join(FEATURE_NAMES + ['airTemperature', 'pressure', 'waveHeight']) 
-    
-    # CRITICAL FIX: Use UNIX Timestamps and ensure non-zero range (fetch 2 hours)
-    start_time_arrow = arrow.utcnow().floor('hour')
-    end_time_arrow = start_time_arrow.shift(hours=+1) # Fetch current hour + next hour
-    
-    start_ts = start_time_arrow.timestamp()
-    end_ts = end_time_arrow.timestamp()
-    
-    url = "https://api.stormglass.io/v2/weather/point" 
-
     try:
         response = requests.get(
-            url, 
+            'https://api.stormglass.io/v2/weather/point',
             params={
-                'lat': lat,
-                'lng': lon,
-                'params': params,
-                'start': start_ts, # UNIX Timestamp
-                'end': end_ts,     # UNIX Timestamp
+                'lat': lat, 'lng': lon,
+                'params': ','.join(FEATURE_NAMES),
+                'start': start_time.timestamp(), 'end': end_time.timestamp(),
             },
             headers={'Authorization': STORMGLASS_API_KEY}
         )
-        response.raise_for_status() 
+        response.raise_for_status()
         data = response.json()
         
-        # We process the first hour's data point
-        if 'hours' not in data or not data['hours']:
-             raise ValueError("Stormglass returned no data for 'hours'.")
-        
-        current_data = data['hours'][0] 
+        if not data.get('hours'): return None, False
 
-        # --- Data Extraction (Using 'sg' source for all features) ---
-        raw_data_output = {}
-        features_available = True
+        current_hour_data = data['hours'][0]
+        features = {}
+        is_data_valid = True
+        for param in FEATURE_NAMES:
+            value = _get_average_from_sources(current_hour_data.get(param, {}))
+            if value is None:
+                is_data_valid = False # Mark as invalid if a feature is missing
+            features[param] = value
         
-        # Extract all needed values
-        for param in FEATURE_NAMES + ['waveHeight']:
-            # Safely extract feature value, defaulting to None if missing
-            value = current_data.get(param, {}).get('sg') 
-            raw_data_output[param] = float(value) if value is not None else None
-            
-            # Check if features needed for prediction are present
-            if param in FEATURE_NAMES and raw_data_output[param] is None:
-                features_available = False
-        
-        raw_data_output['timestamp'] = datetime.now(timezone.utc).isoformat()
-        
-        return raw_data_output, features_available
-        
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching Stormglass data for {coords}: {e}", file=sys.stderr)
-        return None, False
+        return features, is_data_valid
     except Exception as e:
-        print(f"Error processing Stormglass JSON data: {e}", file=sys.stderr)
+        print(f"Error fetching real-time weather: {e}", file=sys.stderr)
         return None, False
 
-
-def run_ml_prediction(spot, fetched_weather, features_valid):
+def run_ml_prediction(features):
     """
-    Predicts wave height using the loaded Random Forest model (Model 1 - FR-006).
+    Uses the loaded multi-output model to predict a full set of surf conditions.
     """
-    # CRITICAL FIX: Use a local flag to check if ML can run.
-    run_ml_mode = SURF_PREDICTOR is not None and features_valid
+    # Create a DataFrame with the correct feature names
+    input_df = pd.DataFrame([features], columns=FEATURE_NAMES)
     
-    # Prepare inputs using the keys defined in FEATURE_NAMES
-    input_features = [fetched_weather.get(name) for name in FEATURE_NAMES]
+    # The model predicts all targets at once, returning an array like [[val1, val2, ...]]
+    predictions_array = SURF_PREDICTOR.predict(input_df)
     
-    if run_ml_mode:
-        # --- ML Model Prediction Path (FR-006) ---
-        try:
-            # 1. Prepare Features (Use DataFrame to pass FEATURE_NAMES - CRITICAL FIX)
-            features_df = pd.DataFrame(
-                [input_features], 
-                columns=FEATURE_NAMES 
-            )
-            
-            # 2. Predict Wave Height 
-            predicted_wave_height = SURF_PREDICTOR.predict(features_df)[0]
-            predicted_wave_height = round(float(predicted_wave_height), 1)
-            
-            accuracy = f"{random.uniform(85, 95):.1f}%" 
-            
-        except Exception as e:
-            # Fallback if prediction fails 
-            predicted_wave_height = fetched_weather.get('waveHeight', random.uniform(0.5, 2.0))
-            accuracy = f"{random.randint(60, 80)}%"
-
-    else:
-        # --- Fallback Simulation Path (if model not trained or data missing) ---
-        # Use observed swell height for a better mock
-        swell_height_safe = fetched_weather.get('swellHeight', 0.8)
-        predicted_wave_height = 1.2 * swell_height_safe + random.uniform(-0.2, 0.2)
-        predicted_wave_height = round(max(0.2, predicted_wave_height), 1)
-        accuracy = f"{random.randint(60, 80)}%" 
-
-    # Determine tide status based on sea level
-    sea_level = fetched_weather.get('seaLevel', 0.5)
+    # Map the predicted values back to their names
+    predictions = dict(zip(TARGET_NAMES, predictions_array[0]))
+    
+    # --- Post-process and format the final forecast object ---
+    # Determine tide status based on the seaLevel feature
+    sea_level = features.get('seaLevel', 0.5)
     tide_status = 'High' if sea_level > 0.8 else ('Low' if sea_level < 0.3 else 'Mid')
     
     return {
-        'waveHeight': max(0.2, predicted_wave_height), 
-        'wind': {'speed': round((fetched_weather.get('windSpeed') or 5) * 3.6), 'direction': 'Offshore'}, 
-        'tide': {'status': tide_status, 'next': 'TBD'},
-        'accuracy_confidence': accuracy 
+        'waveHeight': round(float(predictions.get('waveHeight', 0)), 1),
+        'wavePeriod': round(float(predictions.get('wavePeriod', 0)), 1),
+        'windSpeed': round(float(predictions.get('windSpeed', 0)) * 3.6, 1), # Convert m/s to kph
+        'windDirection': round(float(predictions.get('windDirection', 0)), 1),
+        'tide': {'status': tide_status}
     }
 
-
-def get_spots_with_predictions(skill_level):
-    predicted_spots = []
-    
+def get_spots_with_predictions():
+    """Main function to iterate through spots, fetch features, and get predictions."""
+    all_spots_data = []
     for spot in SURF_SPOTS:
-        # Fetch data and get the validity flag
-        fetched_weather, features_valid = fetch_real_time_weather(spot['coords'])
+        features, is_valid = fetch_future_weather_features(spot['coords'])
         
-        if fetched_weather is None:
-            continue
-
-        # Run ML Prediction (Model 1)
-        forecast = run_ml_prediction(spot, fetched_weather, features_valid)
+        if SURF_PREDICTOR and is_valid:
+            # If model is loaded and data is valid, run ML prediction
+            forecast = run_ml_prediction(features)
+        else:
+            # Fallback simulation if model or data is unavailable
+            forecast = {
+                'waveHeight': round(features.get('swellHeight', 1.0) * 1.2, 1) if features else 1.2,
+                'wavePeriod': 8, 'windSpeed': 15, 'windDirection': 270,
+                'tide': {'status': 'Mid'}
+            }
         
-        # Save historical record (FR-005)
-        save_historical_data(spot['id'], fetched_weather, forecast) 
+        all_spots_data.append({**spot, 'forecast': forecast})
         
-        predicted_spots.append({
-            **spot,
-            'forecast': forecast,
-        })
-        
-    return predicted_spots
-
-# --- Execution Entry Point ---
+    return all_spots_data
 
 if __name__ == '__main__':
-    if len(sys.argv) > 1:
-        skill = sys.argv[1]
-    else:
-        skill = 'Beginner' 
-
     try:
-        results = get_spots_with_predictions(skill)
+        # The script now runs independently of user input and returns all spots
+        results = get_spots_with_predictions()
+        # The final output is a JSON string printed to standard output
         print(json.dumps({'spots': results}))
-        
     except Exception as e:
-        sys.stderr.write(json.dumps({'error': str(e), 'traceback': str(e)}))
+        # Print errors to stderr so Node.js can capture them
+        print(json.dumps({'error': str(e)}), file=sys.stderr)
         sys.exit(1)

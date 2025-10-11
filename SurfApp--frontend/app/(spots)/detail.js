@@ -1,4 +1,3 @@
-// app/(spots)/detail.js
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
@@ -10,7 +9,7 @@ const SpotDetailScreen = () => {
   try {
     spot = params && params.spot ? JSON.parse(params.spot) : null;
   } catch (e) {
-    console.warn('Failed to parse spot param', e);
+    console.warn('Failed to parse spot param from navigation', e);
   }
 
   if (!spot) {
@@ -18,23 +17,31 @@ const SpotDetailScreen = () => {
       <>
         <Stack.Screen options={{ title: 'Spot Details' }} />
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <Text>Spot details are not available.</Text>
+          <Text>Spot details could not be loaded.</Text>
         </View>
       </>
     );
   }
+
+  // Safely access nested forecast data
+  const forecast = spot.forecast || {};
+  const wind = forecast.wind || {};
+  const tide = forecast.tide || {};
 
   return (
     <>
       <Stack.Screen options={{ title: spot.name }} />
       <ScrollView style={styles.container}>
         <Text style={styles.header}>{spot.name}</Text>
+        <Text style={styles.regionHeader}>{spot.region}</Text>
+        
         <View style={styles.detailsContainer}>
-          <Text style={styles.detailText}>Suitability: {spot.suitability.toFixed(0)}%</Text>
-          <Text style={styles.detailText}>Wave Height: {spot.forecast.waveHeight}m</Text>
-          <Text style={styles.detailText}>Wind: {spot.forecast.wind.speed} kph</Text>
-          <Text style={styles.detailText}>Tide: {spot.forecast.tide.status}</Text>
+          <Text style={styles.detailText}>Suitability Score: {spot.suitability.toFixed(0)}%</Text>
+          <Text style={styles.detailText}>Wave: {forecast.waveHeight}m @ {forecast.wavePeriod}s</Text>
+          <Text style={styles.detailText}>Wind: {forecast.windSpeed} kph from {forecast.windDirection}°</Text>
+          <Text style={styles.detailText}>Tide: {tide.status}</Text>
         </View>
+        
         <Text style={styles.chartHeader}>7-Day Wave Forecast (m)</Text>
         <ForecastChart />
       </ScrollView>
@@ -42,37 +49,44 @@ const SpotDetailScreen = () => {
   );
 };
 
-export default SpotDetailScreen;
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#f9f9f9',
     padding: 16,
   },
   header: {
     fontSize: 28,
     fontWeight: 'bold',
-    marginBottom: 12,
-    color: '#222',
+    color: '#111',
     textAlign: 'center',
   },
+  regionHeader: {
+    fontSize: 18,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
   detailsContainer: {
-    marginBottom: 24,
-    backgroundColor: '#f2f2f2',
+    backgroundColor: '#fff',
     borderRadius: 8,
     padding: 16,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: '#eee',
   },
   detailText: {
     fontSize: 16,
-    marginBottom: 8,
+    marginBottom: 10,
     color: '#444',
   },
   chartHeader: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
-    marginBottom: 8,
-    color: '#222',
+    marginBottom: 10,
+    color: '#333',
     textAlign: 'center',
   },
 });
+
+export default SpotDetailScreen;
