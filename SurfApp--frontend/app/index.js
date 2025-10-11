@@ -8,7 +8,7 @@ import { getSpotsData } from '../data/surfApi';
 import SpotCard from '../components/SpotCard';
 
 const HomeScreen = () => {
-  const { userPreferences } = useContext(UserContext); // CHANGED: Get full preferences
+  const { userPreferences } = useContext(UserContext); // This part is correct
   const [spots, setSpots] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -16,7 +16,6 @@ const HomeScreen = () => {
     const fetchSpots = async () => {
       try {
         setLoading(true);
-        // CHANGED: Pass the full preferences object to the API
         const data = await getSpotsData(userPreferences); 
         setSpots(data);
       } catch (e) {
@@ -25,11 +24,13 @@ const HomeScreen = () => {
         setLoading(false);
       }
     };
-    // Dependency now tracks the entire preferences object
+    
     fetchSpots();
+  // --- THIS IS THE FIX ---
+  // The useEffect will now re-run whenever the userPreferences object changes.
   }, [userPreferences]); 
 
-  const topPick = spots[0]; // The best recommendation based on sorting
+  const topPick = spots[0];
 
   if (loading) {
     return (
@@ -52,7 +53,7 @@ const HomeScreen = () => {
   return (
     <SafeAreaView style={styles.container}>
       <Text style={styles.header}>Welcome, {userPreferences.skillLevel} Surfer!</Text>
-      <Text style={styles.subHeader}>Todays Top Recommendation</Text>
+      <Text style={styles.subHeader}>{`Today's Top Recommendation`}</Text>
       
       <Link href={{ pathname: "/(spots)/detail", params: { spot: JSON.stringify(topPick) } }} asChild>
         <SpotCard spot={topPick} />
