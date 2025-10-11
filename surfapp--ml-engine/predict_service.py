@@ -22,6 +22,7 @@ FEATURE_NAMES = [
 ]
 TARGET_NAMES = ['waveHeight', 'wavePeriod', 'windSpeed', 'windDirection']
 
+# --- THIS IS THE FIX: The 'coords' are now a simple flat array, not a nested one ---
 SURF_SPOTS = [
     {'id': '1', 'name': 'Arugam Bay', 'region': 'East Coast', 'coords': [81.829, 6.843]},
     {'id': '2', 'name': 'Weligama', 'region': 'South Coast', 'coords': [80.426, 5.972]},
@@ -47,7 +48,6 @@ def _get_average_from_sources(source_dict):
     return sum(valid_values) / len(valid_values) if valid_values else None
 
 def fetch_future_weather_features(coords):
-    """Fetches future weather data. Returns None on failure."""
     if not STORMGLASS_API_KEY:
         print("API key is missing.", file=sys.stderr)
         return None, False
@@ -59,11 +59,7 @@ def fetch_future_weather_features(coords):
     try:
         response = requests.get(
             'https://api.stormglass.io/v2/weather/point',
-            params={
-                'lat': lat, 'lng': lon,
-                'params': ','.join(FEATURE_NAMES),
-                'start': start_time.timestamp(), 'end': end_time.timestamp(),
-            },
+            params={ 'lat': lat, 'lng': lon, 'params': ','.join(FEATURE_NAMES), 'start': start_time.timestamp(), 'end': end_time.timestamp() },
             headers={'Authorization': STORMGLASS_API_KEY}
         )
         response.raise_for_status()
@@ -83,13 +79,12 @@ def fetch_future_weather_features(coords):
         return features, is_data_valid
     except requests.exceptions.RequestException as e:
         print(f"API request failed: {e}. Will use mock data.", file=sys.stderr)
-        return None, False # Explicitly return None on API failure
+        return None, False
     except Exception as e:
         print(f"Error processing weather data: {e}", file=sys.stderr)
         return None, False
 
 def run_ml_prediction(features):
-    """Uses the loaded model to predict the full set of surf conditions."""
     input_df = pd.DataFrame([features], columns=FEATURE_NAMES)
     predictions_array = SURF_PREDICTOR.predict(input_df)
     predictions = dict(zip(TARGET_NAMES, predictions_array[0]))
@@ -106,7 +101,6 @@ def run_ml_prediction(features):
     }
 
 def generate_mock_forecast(spot):
-    """Generates a realistic but random forecast when the API fails."""
     print(f"Generating mock forecast for {spot['name']}.", file=sys.stderr)
     is_east_coast = spot['region'] == 'East Coast'
     
@@ -114,21 +108,18 @@ def generate_mock_forecast(spot):
         'waveHeight': round(random.uniform(0.5, 2.2), 1),
         'wavePeriod': round(random.uniform(7, 14), 1),
         'windSpeed': round(random.uniform(5, 30), 1),
-        'windDirection': round(random.uniform(250, 290) if is_east_coast else random.uniform(0, 50), 1), # Offshore winds
+        'windDirection': round(random.uniform(250, 290) if is_east_coast else random.uniform(0, 50), 1),
         'tide': {'status': random.choice(['Low', 'Mid', 'High'])}
     }
 
 def get_spots_with_predictions():
-    """Main function to get predictions for all spots, with mock data fallback."""
     all_spots_data = []
     for spot in SURF_SPOTS:
         features, is_valid = fetch_future_weather_features(spot['coords'])
         
         if SURF_PREDICTOR and is_valid:
-            # --- Primary Path: Use the ML Model ---
             forecast = run_ml_prediction(features)
         else:
-            # --- Fallback Path: Generate Mock Data ---
             forecast = generate_mock_forecast(spot)
         
         all_spots_data.append({**spot, 'forecast': forecast})
